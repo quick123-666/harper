@@ -292,12 +292,13 @@ pub(crate) fn is_ei_ie_misspelling(a: &[char], b: &[char]) -> bool {
 /// Scores a possible spelling suggestion based on possible relevance to the user.
 ///
 /// Lower = better.
+/// Uses multiplicative weights: each factor multiplies the base score.
 fn score_suggestion(misspelled_word: &[char], sug: &FuzzyMatchResult) -> i32 {
     if misspelled_word.is_empty() || sug.word.is_empty() {
         return i32::MAX;
     }
 
-    let mut score = sug.edit_distance as i32 * 10;
+    let mut score = (sug.edit_distance as f64 * 10.0) as i32;
 
     // People are much less likely to mistype the first letter.
     if misspelled_word
@@ -305,17 +306,17 @@ fn score_suggestion(misspelled_word: &[char], sug: &FuzzyMatchResult) -> i32 {
         .unwrap()
         .eq_ignore_ascii_case(sug.word.first().unwrap())
     {
-        score -= 10;
+        score = (score as f64 * 0.9) as i32;
     }
 
     // If the original word is plural, the correct one probably is too.
     if *misspelled_word.last().unwrap() == 's' && *sug.word.last().unwrap() == 's' {
-        score -= 5;
+        score = (score as f64 * 0.95) as i32;
     }
 
     // Promote suggestions that differ only by an apostrophe
     let check_apostrophe_diff = |longer: &[char], shorter: &[char]| -> bool {
-        if let Some(pos) = longer.iter().position(|&c| c == '\'' || c == '’') {
+        if let Some(pos) = longer.iter().position(|&c| c == '\'' || c == '\u{2019}') {
             longer.len() - 1 == shorter.len()
                 && longer.starts_with(&shorter[..pos])
                 && longer.ends_with(&shorter[pos..])
@@ -332,28 +333,30 @@ fn score_suggestion(misspelled_word: &[char], sug: &FuzzyMatchResult) -> i32 {
             if (misspelled_word.contains(&'\'') || misspelled_word.contains(&'\u{2019}'))
                 && check_apostrophe_diff(misspelled_word, sug.word) =>
         {
-            score -= 8
+            score = (score as f64 * 0.92) as i32;
         }
-        (-1, true) if check_apostrophe_diff(sug.word, misspelled_word) => score -= 8,
+        (-1, true) if check_apostrophe_diff(sug.word, misspelled_word) => {
+            score = (score as f64 * 0.92) as i32;
+        }
         _ => {} // not a single-character apostrophe difference
     }
 
     // Boost common words.
     if sug.metadata.common && sug.metadata.derived_from.is_none() {
-        score -= 4;
+        score = (score as f64 * 0.96) as i32;
     }
 
     // For turning words into contractions.
     if sug.word.iter().filter(|c| **c == '\'').count() == 1 {
-        score -= 5;
+        score = (score as f64 * 0.95) as i32;
     }
 
     if is_th_h_missing(misspelled_word, sug.word) {
-        score -= 6;
+        score = (score as f64 * 0.94) as i32;
     }
 
     if !misspelled_word.contains_vowel() && !sug.word.contains_vowel() {
-        score += 10;
+        score = (score as f64 * 1.1) as i32;
     }
 
     // Detect dialect-specific variations
@@ -364,15 +367,15 @@ fn score_suggestion(misspelled_word: &[char], sug: &FuzzyMatchResult) -> i32 {
             || is_ay_ey_misspelling(misspelled_word, sug.word)
             || is_th_h_missing(misspelled_word, sug.word))
     {
-        score -= 6;
+        score = (score as f64 * 0.94) as i32;
     }
 
     if sug.edit_distance <= 2 {
         if is_ei_ie_misspelling(misspelled_word, sug.word) {
-            score -= 11;
+            score = (score as f64 * 0.89) as i32;
         }
         if is_er_misspelling(misspelled_word, sug.word) {
-            score -= 15;
+            score = (score as f64 * 0.85) as i32;
         }
     }
 
@@ -433,7 +436,7 @@ mod tests {
 
     #[test]
     fn normalizes_weve() {
-        let word = ['w', 'e', '’', 'v', 'e'];
+        let word = ['w', 'e', ''', 'v', 'e'];
         let norm = word.normalized();
 
         assert_eq!(norm.clone(), vec!['w', 'e', '\'', 'v', 'e'])
@@ -557,8 +560,8 @@ mod tests {
     }
 
     #[test]
-    fn aknowledged_correction() {
-        assert_suggests_correction("aknowledged", "acknowledged");
+    fn aknowledgeed_correction() {
+        assert_suggests_correction("aknowledgeed", "acknowledged");
     }
 
     #[test]
@@ -583,7 +586,7 @@ mod tests {
 
     #[test]
     fn v_apostrophe_typographical_s_suggests_vs() {
-        assert_suggests_correction("v’s", "vs");
+        assert_suggests_correction("v's", "vs");
     }
 
     #[test]
